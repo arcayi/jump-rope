@@ -1,12 +1,22 @@
+import argparse
+import logging
 import time
 
 import cv2
 import numpy as np
+from video_grabber.image_misc import cv_show_images
+from video_grabber.logging import Logger
+from video_grabber.option_key_value import option_key_values
+from video_grabber.video_grabber import VideoGrabber
+from ai_models.blazepose.blazepose_triton_client import Blazepose, Blazepose_Detect, Blazepose_Landmark, option_key
+from ai_models.blazepose.parser import args_parser
 
-from jump_detect import JumpCounter
+from jump_detect import JumpCounter, MILLI
 
-VIDEO_SOURCE = 0  # Camera input
-VIDEO_SOURCE = 'rope_jump_3.mp4'  # File input
+__logger = Logger("Track_Person")
+
+# VIDEO_SOURCE = 0  # Camera input
+# VIDEO_SOURCE = "rope_jump_3.mp4"  # File input
 
 BOUNDING_BOX_SCALE_FACTOR = 0.7
 
@@ -18,15 +28,16 @@ def _show_frame(frame, box, color, jumps):
     if box is not None:
         (x, y, w, h) = map(int, box)
         cv2.rectangle(frame, (x, y), (x + w, y + h), color, 3)
-        cv2.putText(frame, f'{jumps}', (0, 70), cv2.FONT_HERSHEY_SIMPLEX, 3, (36, 255, 12), 6)
-    cv2.imshow("Video", frame)
+        cv2.putText(frame, f"{jumps}", (0, 70), cv2.FONT_HERSHEY_SIMPLEX, 3, (36, 255, 12), 6)
+    # cv2.imshow("Video", frame)
+    return frame
 
 
 def _scale_box(box, f):
     if box is None:
         return None
     (x, y, w, h) = box
-    return x + int(.5 * w * (1 - f)), y + int(.5 * h * (1 - f)), w * f, h * f
+    return x + int(0.5 * w * (1 - f)), y + int(0.5 * h * (1 - f)), int(w * f), int(h * f)
 
 
 def _smaller_box(box):
@@ -34,95 +45,156 @@ def _smaller_box(box):
 
 
 def _bigger_box(box):
-    return _scale_box(box, 0.9/BOUNDING_BOX_SCALE_FACTOR)
+    return _scale_box(box, 0.9 / BOUNDING_BOX_SCALE_FACTOR)
 
 
-def _init_tracker_and_box(cnts, frame, weights):
-    box = cnts[np.argmax(weights)]
-    box = _smaller_box(box)
-    tracker = cv2.TrackerKCF_create()
-    tracker.init(frame, tuple(box))
-    return box, tracker
-
-
-def _init_tracker_if_person_detected(frame, hog):
-    (cnts, weights) = hog.detectMultiScale(
-        frame,
-        winStride=(4, 4),
-        padding=(4, 4),
-        scale=1.05)
-
-    if len(cnts) == 0:
-        return None, None
-
-    return _init_tracker_and_box(cnts, frame, weights)
-
-
-def _init_variables():
-    # Capturing video
-    video = cv2.VideoCapture(VIDEO_SOURCE)
-    # Initializing the HOG person detector
-    hog = cv2.HOGDescriptor()
-    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-    tracker = None
-    jump_counter = JumpCounter()
-    return hog, jump_counter, tracker, video
-
-
-def _get_tracker_get_box(frame, hog, tracker):
-    if tracker is None:
-        return _init_tracker_if_person_detected(frame, hog)
-
-    (success, box) = tracker.update(frame)
-    if not success:
-        box = None
-        tracker.clear()
-        tracker = None
-
-    return box, tracker
-
-
-def _get_jump_count(box, jump_counter, video):
+def _get_jump_count(box, jump_counter, timestamp):
     if box is None:
         return 0
 
-    if VIDEO_SOURCE == 0:
-        timestamp = int(time.time())
-    else:
-        timestamp = video.get(cv2.CAP_PROP_POS_MSEC)
-
-    return jump_counter.count_jumps(_bigger_box(box), timestamp)
+    return jump_counter.count_jumps(box, timestamp)
 
 
-def _q_key_pressed():
-    return cv2.waitKey(1) == ord('q')
+def main(_args, _idx=None):
+    FLAGS = _args
+    # Rendering flags
+    option = FLAGS.draw_verbose if FLAGS.draw_verbose is not None else []
+    okv = option_key_values(option_key=option_key, keys=option)
+    logging.debug(f"{okv.__str__()= }")
 
+    draw_shape = FLAGS.draw_shape if FLAGS.draw_shape is not None else (400, 400, 3)
 
-def _cleanup(video):
-    video.release()
+    vg = VideoGrabber(video_path=FLAGS.video_source, simulate_fps=False)
+    if vg.source == "video_file":
+        if FLAGS.begin_ms > 0:
+            vg.stream.set(cv2.CAP_PROP_POS_MSEC, FLAGS.begin_ms)
+        elif FLAGS.begin_frame > 0:
+            vg.stream.set(cv2.CAP_PROP_POS_FRAMES, FLAGS.begin_frame)
+
+    bp_client = Blazepose(
+        Blazepose_Detect(score_threshold=0.5, nms_threshold=0.5, best_only=True),
+        Blazepose_Landmark(score_threshold=0.5, postprocess_segmentation=True, use_cuda=False),
+        force_detection=_args.force_detection,
+    )
+
+    jump_counter = JumpCounter()
+
+    print(">>> Start")
+
+    vg.start()
+    regions_from_landmarks = []
+    start_timestamp = int(time.time())
+    while vg.is_alive:
+        try:
+            frame = vg.get()
+        except RuntimeError as e:
+            vg.log(f"Exception: {str(e)}", level=logging.DEBUG)
+            break
+        logging.info(f"{vg.current_image_name= }, {frame.shape= }")
+
+        # Input frame
+        src_h, src_w, src_c = frame.shape
+        _, _, regions_from_landmarks = bp_client.process(frame, regions_from_landmarks)
+
+        # logging.info(f"    {len(regions_active)= }")
+        # logging.debug(f"        {regions_active= }")
+        box = np.array(
+            [
+                [bp_client.regions_active[0].rect_x_center, bp_client.regions_active[0].rect_y_center],
+                [bp_client.regions_active[0].rect_w, bp_client.regions_active[0].rect_h],
+            ]
+        )
+        box[0, :] -= box[1, :] / 2
+        scale = np.max(frame.shape[:2])
+        logging.debug(f"{box= }, {scale= }")
+        box = (box * scale).reshape([4]).astype(int)
+        logging.debug(f"{box= }")
+
+        # timestamp = vg.current_image_name * MILLI / vg.fps + start_timestamp
+        timestamp = vg.current_image_name / vg.fps + start_timestamp
+        __logger.debug(f"{timestamp= }")
+
+        jumps = _get_jump_count(box, jump_counter, timestamp)
+        # if vg.is_file:
+        #     timestamp = vg.stream.get(cv2.CAP_PROP_POS_MSEC)
+        # else:
+        #     timestamp = int(time.time())
+        # jump_counter.count_jumps(_bigger_box(box), timestamp)
+        if FLAGS.display:
+            vis_frame = _show_frame(frame, box, GREEN, jumps)
+
+            # draw_original = okv.value_by_option("draw_original")
+            # draw_scores = okv.value_by_option("draw_scores")
+            # draw_pd_box = okv.value_by_option("draw_pd_box")
+            # draw_pd_kps = okv.value_by_option("draw_pd_kps")
+            # draw_rot_rect = okv.value_by_option("draw_rot_rect")
+            # draw_landmarks = okv.value_by_option("draw_landmarks")
+            draw_fps = okv.value_by_option("draw_fps")
+            # draw_segmentation = okv.value_by_option("draw_segmentation")
+            vis_frame = bp_client.visualize(
+                vis_frame,
+                draw_scores=okv.value_by_option("draw_scores"),
+                draw_pd_box=okv.value_by_option("draw_pd_box"),
+                draw_pd_kps=okv.value_by_option("draw_pd_kps"),
+                draw_landmarks=okv.value_by_option("draw_landmarks"),
+                draw_segmentation=okv.value_by_option("draw_segmentation"),
+                draw_rot_rect=okv.value_by_option("draw_rot_rect"),
+            )
+            if draw_fps and vg.out_fps is not None:
+                cv2.putText(
+                    vis_frame,
+                    f"FPS={vg.out_fps.get():.1f}",
+                    (10, -10 + vis_frame.shape[0]),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.5,
+                    (100, 100, 240),
+                    2,
+                )
+
+            wfs = {}
+            if okv.value_by_option("draw_original"):
+                wfs.update({"frame": frame})
+            # vis_frame = cv2.cvtColor(annotated_pose_frame, cv2.COLOR_RGB2BGR)
+            wfs.update({"annotated_frame": vis_frame})
+
+            cv_show_images(wfs, draw_shape)
+            if FLAGS.interval < 0:
+                key = cv2.pollKey()
+            else:
+                key = cv2.waitKey(FLAGS.interval)
+
+            if key == 27:
+                # is_break = True
+                break
+            elif key == 32:
+                # Pause on space bar
+                key = cv2.waitKey(0)
+                while key != 32:
+                    key = cv2.waitKey(0)
+            elif key > 0:
+                key = chr(key)
+                logging.debug(f"{key= }")
+                if okv.toggle_by_key(key):
+                    logging.debug(f"{okv.kos[key]= },{okv.value_by_key(key)= }")
+
+        # if is_break:
+        #     break
+        logging.debug(f"    {vg.statistics()}")
+    logging.info(f"        {vg.statistics()}")
+
+    print("PASS: infer")
     cv2.destroyAllWindows()
+    vg.stop()
 
 
-def main_loop():
-    hog, jump_counter, tracker, video = _init_variables()
+if __name__ == "__main__":
+    FLAGS = args_parser().parse_args()
 
-    # Infinite while loop to treat stack of image as video
-    while True:
-        # Reading frame(image) from video
-        check, frame = video.read()
+    # initialize Log
+    logging.basicConfig(
+        format="[%(process)d,%(thread)x]%(asctime)s -%(levelname)s- %(name)s: %(message)s",
+        level=FLAGS.loglevel,
+    )
 
-        if frame is None:
-            break
-
-        box, tracker = _get_tracker_get_box(frame, hog, tracker)
-        jumps = _get_jump_count(box, jump_counter, video)
-        _show_frame(frame, _bigger_box(box), GREEN, jumps)
-
-        if _q_key_pressed():
-            break
-
-    _cleanup(video)
-
-
-if __name__ == '__main__':
-    main_loop()
+    # main_loop(FLAGS)
+    main(FLAGS)
