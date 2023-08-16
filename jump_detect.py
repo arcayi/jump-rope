@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Tuple
 import pandas as pd
 from video_grabber.logging import Logger
@@ -10,14 +11,14 @@ class JumpCounter:
 
     def __init__(
         self,
-        man_height_m=2,
+        man_height_m=1.8,
         earth_gravity=9.81,
-        acceleration_error_ratio=0.7,
+        acceleration_error_ratio=0.6,
         interpolation_span_p=15,
         interpolation_span_v=60,
         interpolation_span_a=60,
         max_milliseconds_between_jumps=800,
-        min_n_frames=4,
+        min_n_frames=1,
         min_jump_ratio_to_body=0.001,
     ):
         self.man_height_m = man_height_m
@@ -133,18 +134,18 @@ class JumpCounter:
     def all_df(self):
         return pd.DataFrame({"box": self._all_boxes}, index=pd.to_datetime(self._all_timestamps, unit="s"))
 
-    def dump(self):
+    def dump(self, output_path: Path = Path("./output")):
         self.__logger.debug(f"{self.all_df= }")
-        self.all_df.to_pickle("boxes_2.df")
+        output_path.mkdir(parents=True, exist_ok=True)
+        self.all_df.to_pickle(output_path.joinpath("boxes_2.df").as_posix())
 
-        from pathlib import Path
         import pickle
 
         data_to_save = {
             "timestamp": self._all_timestamps,
             "box": self._all_boxes,
         }
-        with Path("boxes_2.pk").open(mode="wb") as fp:
+        with output_path.joinpath("boxes_2.pk").open(mode="wb") as fp:
             pickle.dump(data_to_save, fp)
 
     def __del__(self):
