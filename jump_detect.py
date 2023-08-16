@@ -10,12 +10,12 @@ class JumpCounter:
 
     def __init__(
         self,
-        man_height_m=1.7,
-        earth_gravity=9.8,
-        acceleration_error_ratio=0.5,
-        interpolation_span_p=50,
-        interpolation_span_v=50,
-        interpolation_span_a=100,
+        man_height_m=2,
+        earth_gravity=9.81,
+        acceleration_error_ratio=0.7,
+        interpolation_span_p=15,
+        interpolation_span_v=60,
+        interpolation_span_a=60,
         max_milliseconds_between_jumps=800,
         min_n_frames=4,
         min_jump_ratio_to_body=0.001,
@@ -45,27 +45,27 @@ class JumpCounter:
         # return self._boxes and new_box[3] != self._boxes[-1][3]
         return self._boxes and abs(new_box[3] / self._boxes[-1][3] - 1) > 0.1
 
-    def _check_for_jump(self):
-        self.df_check = self.df
+    def _check_for_jump(self, df_box: pd.DataFrame = None):
+        self.df_box = self.df if df_box is None else df_box
         # self.__logger.debug(f"{df= }")
-        m_to_p_ratio = self.man_height_m / self.df_check.box.head(1).item()[3]
+        m_to_p_ratio = self.man_height_m / self.df_box.box.head(1).item()[3]
         # self.df_check.index = pd.to_datetime(self.df_check.index, unit="ms")
-        self.df_check["y"] = self.df_check.box.apply(lambda r: -r[1] * m_to_p_ratio)
+        self.df_box["y"] = self.df_box.box.apply(lambda r: -r[1] * m_to_p_ratio)
         # self.__logger.debug(f"{df= }")
-        self.__logger.debug(f"{self.df_check= }")
+        self.__logger.debug(f"{self.df_box= }")
 
-        interpolated = self.df_check.y.resample("L").ffill(limit=1).interpolate()
-        smoothed = interpolated.ewm(span=self.interpolation_span_p).mean()
-        velocity = (smoothed.diff() * MILLI).ewm(span=self.interpolation_span_v).mean()
-        acceleration = (velocity.diff() * MILLI).ewm(span=self.interpolation_span_a).mean()
+        self.interpolated = self.df_box.y.resample("L").ffill(limit=1).interpolate()
+        self.smoothed = self.interpolated.ewm(span=self.interpolation_span_p).mean()
+        self.velocity = (self.smoothed.diff() * MILLI).ewm(span=self.interpolation_span_v).mean()
+        self.acceleration = (self.velocity.diff() * MILLI).ewm(span=self.interpolation_span_a).mean()
 
-        person_height = m_to_p_ratio * self.df_check.box[-1][-1]
+        person_height = m_to_p_ratio * self.df_box.box[-1][-1]
 
         self.df_check = pd.DataFrame(
             {
-                "y": smoothed,
-                "v": velocity,
-                "a": acceleration.shift(-int(self.interpolation_span_a / 2)),
+                "y": self.smoothed,
+                "v": self.velocity,
+                "a": self.acceleration.shift(-int(self.interpolation_span_a / 2)),
             }
         )
         # self.df_check = pd.DataFrame({"y": smoothed, "v": velocity, "a": acceleration})
@@ -134,6 +134,7 @@ class JumpCounter:
         return pd.DataFrame({"box": self._all_boxes}, index=pd.to_datetime(self._all_timestamps, unit="s"))
 
     def dump(self):
+        self.__logger.debug(f"{self.all_df= }")
         self.all_df.to_pickle("boxes_2.df")
 
         from pathlib import Path
