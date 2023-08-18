@@ -1,6 +1,7 @@
 import argparse
 import logging
 import time
+import matplotlib.pyplot as plt
 
 import cv2
 import numpy as np
@@ -59,6 +60,11 @@ def main(_args, _idx=None):
     FLAGS = _args
     # Rendering flags
     option = FLAGS.draw_verbose if FLAGS.draw_verbose is not None else []
+    option_key.update(
+        {
+            "draw_history": "h",
+        }
+    )
     okv = option_key_values(option_key=option_key, keys=option)
     logging.debug(f"{okv.__str__()= }")
 
@@ -152,10 +158,13 @@ def main(_args, _idx=None):
                 )
 
             wfs = {}
+            wfs.update({"annotated_frame": vis_frame})
+            if okv.value_by_option("draw_history"):
+                plot_hist = jump_counter.visualize(lenth=3000)
+                wfs.update({"plot_hist": plot_hist})
             if okv.value_by_option("draw_original"):
                 wfs.update({"frame": frame})
             # vis_frame = cv2.cvtColor(annotated_pose_frame, cv2.COLOR_RGB2BGR)
-            wfs.update({"annotated_frame": vis_frame})
 
             cv_show_images(wfs, draw_shape)
             if FLAGS.interval < 0:
@@ -181,6 +190,7 @@ def main(_args, _idx=None):
         #     break
         logging.debug(f"    {vg.statistics()}")
     logging.info(f"        {vg.statistics()}")
+    jump_counter.dump()
 
     print("PASS: infer")
     cv2.destroyAllWindows()
@@ -195,6 +205,8 @@ if __name__ == "__main__":
         format="[%(process)d,%(thread)x]%(asctime)s -%(levelname)s- %(name)s: %(message)s",
         level=FLAGS.loglevel,
     )
+    plt.set_loglevel("info")
+    logging.getLogger("PIL").setLevel(logging.INFO)
 
     # main_loop(FLAGS)
     main(FLAGS)
