@@ -12,48 +12,17 @@ from video_grabber.video_grabber import VideoGrabber
 from ai_models.blazepose.blazepose_triton_client import Blazepose, Blazepose_Detect, Blazepose_Landmark, option_key
 from ai_models.blazepose.parser import args_parser
 
-from jump_detect import JumpCounter, MILLI
+from sportai_skiprope.jump_detect import JumpCounter, MILLI
 
 __logger = Logger("Track_Person")
 
 # VIDEO_SOURCE = 0  # Camera input
 # VIDEO_SOURCE = "rope_jump_3.mp4"  # File input
 
-BOUNDING_BOX_SCALE_FACTOR = 0.7
+# BOUNDING_BOX_SCALE_FACTOR = 0.7
 
-GREEN = (0, 255, 0)
-RED = (0, 0, 255)
-
-
-def _show_frame(frame, box, color, jumps):
-    if box is not None:
-        (x, y, w, h) = map(int, box)
-        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 3)
-        cv2.putText(frame, f"{jumps}", (0, 70), cv2.FONT_HERSHEY_SIMPLEX, 3, (36, 255, 12), 6)
-    # cv2.imshow("Video", frame)
-    return frame
-
-
-def _scale_box(box, f):
-    if box is None:
-        return None
-    (x, y, w, h) = box
-    return x + int(0.5 * w * (1 - f)), y + int(0.5 * h * (1 - f)), int(w * f), int(h * f)
-
-
-def _smaller_box(box):
-    return _scale_box(box, BOUNDING_BOX_SCALE_FACTOR)
-
-
-def _bigger_box(box):
-    return _scale_box(box, 0.9 / BOUNDING_BOX_SCALE_FACTOR)
-
-
-def _get_jump_count(box, jump_counter, timestamp):
-    if box is None:
-        return 0
-
-    return jump_counter.count_jumps(box, timestamp)
+# GREEN = (0, 255, 0)
+# RED = (0, 0, 255)
 
 
 def main(_args, _idx=None):
@@ -120,14 +89,17 @@ def main(_args, _idx=None):
         timestamp = vg.current_image_name / vg.fps + start_timestamp
         __logger.debug(f"{timestamp= }")
 
-        jumps = _get_jump_count(box, jump_counter, timestamp)
+        # jumps = _get_jump_count(box, jump_counter, timestamp)
+        jumps = jump_counter(box, timestamp)
+
         # if vg.is_file:
         #     timestamp = vg.stream.get(cv2.CAP_PROP_POS_MSEC)
         # else:
         #     timestamp = int(time.time())
-        # jump_counter.count_jumps(_bigger_box(box), timestamp)
+        # jump_counter(_bigger_box(box), timestamp)
         if FLAGS.display:
-            vis_frame = _show_frame(frame, box, GREEN, jumps)
+            # vis_frame = _show_frame(frame, box, GREEN, jumps)
+            vis_frame = jump_counter.draw_frame(frame)
 
             # draw_original = okv.value_by_option("draw_original")
             # draw_scores = okv.value_by_option("draw_scores")
@@ -160,7 +132,7 @@ def main(_args, _idx=None):
             wfs = {}
             wfs.update({"annotated_frame": vis_frame})
             if okv.value_by_option("draw_history"):
-                plot_hist = jump_counter.visualize(lenth=3000)
+                plot_hist = jump_counter.draw_history(lenth=3000)
                 wfs.update({"plot_hist": plot_hist})
             if okv.value_by_option("draw_original"):
                 wfs.update({"frame": frame})

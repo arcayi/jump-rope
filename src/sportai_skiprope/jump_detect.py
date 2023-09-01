@@ -97,7 +97,7 @@ class JumpCounter:
 
         # return False
 
-    def count_jumps(self, box: Tuple[int], timestamp: float) -> int:
+    def __call__(self, box: Tuple[int], timestamp: float) -> int:
         """_summary_
 
         Args:
@@ -142,7 +142,20 @@ class JumpCounter:
 
         return self._count
 
-    def visualize(self, df_all: pd.DataFrame = None, lenth: int = None):
+    # def visualize(self, df_all: pd.DataFrame = None, lenth: int = None):
+    #     pass
+
+    def draw_frame(self, frame, box_color=(0, 255, 0), counter_color=(36, 255, 12),):
+        box = self._boxes[-1]
+        jumps = self._count
+        if box is not None:
+            (x, y, w, h) = map(int, box)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 3)
+            cv2.putText(frame, f"{jumps}", (0, 70), cv2.FONT_HERSHEY_SIMPLEX, 3, counter_color, 6)
+        # cv2.imshow("Video", frame)
+        return frame
+
+    def draw_history(self, df_all: pd.DataFrame = None, lenth: int = None):
         # df_all = self.all_df if df_all is None else df_all
         df_all = self.all_df if df_all is None else df_all
         df_box = df_all
