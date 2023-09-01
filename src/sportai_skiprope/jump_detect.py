@@ -21,13 +21,13 @@ class JumpCounter:
         acceleration_error_ratio=0.6,
         interpolation_span_p=80,
         interpolation_span_v=20,
-        interpolation_span_a=20,
+        interpolation_span_a=10,
         min_seconds_between_jumps=0.15,
         max_seconds_between_jumps=1,
-        min_n_frames=10,
-        min_jump_ratio_to_body=0.005,
-        local_maximum_shift=100,
-        local_min_span=300,
+        min_n_frames=5,
+        min_jump_ratio_to_body=0.006,
+        local_maximum_shift=50,
+        local_min_span=200,
     ):
         self.man_height_m = man_height_m
         self.earth_gravity = earth_gravity
@@ -51,7 +51,8 @@ class JumpCounter:
         self._all_boxes = []
         self._count = 0
         self._last_jump_timestamp = None
-        self.df_check = None
+        self.df_check = []
+        self.status = None
 
     def _is_height_change(self, new_box):
         # return self._boxes and new_box[3] != self._boxes[-1][3]
@@ -59,43 +60,52 @@ class JumpCounter:
 
     def _check_for_jump(self, df_box: pd.DataFrame = None):
         self.df_box = self.df if df_box is None else df_box
-        # self.__logger.debug(f"{df= }")
-        m_to_p_ratio = self.man_height_m / self.df_box.box.head(1).item()[3]
-        # self.df_check.index = pd.to_datetime(self.df_check.index, unit="ms")
-        self.df_box["y"] = self.df_box.box.apply(lambda r: -r[1] * m_to_p_ratio)
-        # self.__logger.debug(f"{df= }")
-        # self.__logger.debug(f"{self.df_box= }")
+        if len(self.df_box) > 0:
+            # self.__logger.debug(f"{df= }")
+            m_to_p_ratio = self.man_height_m / self.df_box.box.head(1).item()[3]
+            # self.df_check.index = pd.to_datetime(self.df_check.index, unit="ms")
+            self.df_box["y"] = self.df_box.box.apply(lambda r: -r[1] * m_to_p_ratio)
+            # self.__logger.debug(f"{df= }")
+            # self.__logger.debug(f"{self.df_box= }")
 
-        self.interpolated = self.df_box.y.resample("L").ffill(limit=1).interpolate()
-        self.smoothed = self.interpolated.ewm(span=self.interpolation_span_p).mean()
-        self.velocity = (self.smoothed.diff() * MILLI).ewm(span=self.interpolation_span_v).mean()
-        self.acceleration = (self.velocity.diff() * MILLI).ewm(span=self.interpolation_span_a).mean()
+            self.interpolated = self.df_box.y.resample("L").ffill(limit=1).interpolate()
+            self.smoothed = self.interpolated.ewm(span=self.interpolation_span_p).mean()
+            self.velocity = (self.smoothed.diff() * MILLI).ewm(span=self.interpolation_span_v).mean()
+            self.acceleration = (self.velocity.diff() * MILLI).ewm(span=self.interpolation_span_a).mean()
 
-        person_height = m_to_p_ratio * self.df_box.box[-1][-1]
+            person_height = m_to_p_ratio * self.df_box.box[-1][-1]
 
-        self.df_check = pd.DataFrame(
-            {
-                "y": self.smoothed,
-                "v": self.velocity,
-                "a": self.acceleration.shift(-int(self.interpolation_span_a / 2)),
-            }
-        )
-        # self.df_check = pd.DataFrame({"y": smoothed, "v": velocity, "a": acceleration})
-        self.df_check["freefall"] = self.df_check.a + self.earth_gravity < self.acceleration_error
-        self.df_check["local_maximum"] = (self.df_check.y.shift(self.local_maximum_shift) < self.df_check.y) & (
-            self.df_check.y.shift(-self.local_maximum_shift) <= self.df_check.y
-        )
-        self.df_check["high_enough"] = (
-            self.df_check.y - self.df_check.y.rolling(self.local_min_span).min()
-        ) > person_height * self.min_jump_ratio_to_body
+            self.df_check = pd.DataFrame(
+                {
+                    "y": self.smoothed,
+                    "v": self.velocity,
+                    "a": self.acceleration.shift(-int(self.interpolation_span_a / 2)),
+                }
+            )
+            # self.df_check = pd.DataFrame({"y": smoothed, "v": velocity, "a": acceleration})
+            self.df_check["freefall"] = self.df_check.a + self.earth_gravity < self.acceleration_error
+            self.df_check["local_maximum"] = (self.df_check.y.shift(self.local_maximum_shift) < self.df_check.y) & (
+                self.df_check.y.shift(-self.local_maximum_shift) <= self.df_check.y
+            )
+            self.df_check["high_enough"] = (
+                self.df_check.y - self.df_check.y.rolling(self.local_min_span).min()
+            ) > person_height * self.min_jump_ratio_to_body
 
-        # self.__logger.debug(f"{self.df_check=}")
-        return any(self.df_check.freefall & self.df_check.local_maximum & self.df_check.high_enough)
-        #     self._boxes = self._boxes[-self.min_n_frames :]
-        #     self._timestamps = self._timestamps[-self.min_n_frames :]
-        #     return True
+            self.status = (
+                "Up"
+                if (self.df_check.freefall[-1] and self.df_check.high_enough[-1])
+                else "Down"
+                if not self.df_check.freefall[-1] and not self.df_check.high_enough[-1]
+                else None
+            )
 
-        # return False
+            # self.__logger.debug(f"{self.df_check=}")
+            return any(self.df_check.freefall & self.df_check.local_maximum & self.df_check.high_enough)
+            #     self._boxes = self._boxes[-self.min_n_frames :]
+            #     self._timestamps = self._timestamps[-self.min_n_frames :]
+            #     return True
+
+        return False
 
     def __call__(self, box: Tuple[int], timestamp: float) -> int:
         """_summary_
@@ -145,13 +155,19 @@ class JumpCounter:
     # def visualize(self, df_all: pd.DataFrame = None, lenth: int = None):
     #     pass
 
-    def draw_frame(self, frame, box_color=(0, 255, 0), counter_color=(36, 255, 12),):
-        box = self._boxes[-1]
+    def draw_frame(
+        self,
+        frame,
+        box_color=(0, 255, 0),
+        counter_color=(36, 255, 12),
+    ):
         jumps = self._count
+        cv2.putText(frame, f"{jumps}", (0, 70), cv2.FONT_HERSHEY_SIMPLEX, 3, counter_color, 6)
+
+        box = self._boxes[-1] if len(self._boxes) > 0 else None
         if box is not None:
             (x, y, w, h) = map(int, box)
             cv2.rectangle(frame, (x, y), (x + w, y + h), box_color, 3)
-            cv2.putText(frame, f"{jumps}", (0, 70), cv2.FONT_HERSHEY_SIMPLEX, 3, counter_color, 6)
         # cv2.imshow("Video", frame)
         return frame
 
@@ -162,17 +178,18 @@ class JumpCounter:
         # self.__logger.info(f"{df_box= }")
         # print(f"{df_box= }")
         self._check_for_jump(df_box)
-        df1 = self.df_check[-lenth:] if lenth is not None else self.df_check
-        # self.__logger.info(f"{df1= }")
-        # self.__logger.info(f"{df1.y= }")
-        # self.__logger.info(f"{df1.y.shape= }")
-
         fig, axes = plt.subplots(nrows=2, ncols=1)
+        if len(self.df_check) > 0:
+            df1 = self.df_check[-lenth:] if lenth is not None else self.df_check
+            # self.__logger.info(f"{df1= }")
+            # self.__logger.info(f"{df1.y= }")
+            # self.__logger.info(f"{df1.y.shape= }")
 
-        # self.smoothed.plot(ax=axes[0], title="Jump detections and vertical position", color="#0088FF")
-        # df1.y.plot(ax=axes[0], title="Jump detections", color="#0088FF")
-        # if lenth is None or len(df1) >= lenth / 2:
-        if True:
+
+            # self.smoothed.plot(ax=axes[0], title="Jump detections and vertical position", color="#0088FF")
+            # df1.y.plot(ax=axes[0], title="Jump detections", color="#0088FF")
+            # if lenth is None or len(df1) >= lenth / 2:
+
             if any(df1.y.notna()):
                 df1.y.plot(ax=axes[0], title="Jump detections", color="#0088FF", label="position")
             if any(df1.a.notna()):

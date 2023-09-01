@@ -52,7 +52,21 @@ def main(_args, _idx=None):
         force_detection=_args.force_detection,
     )
 
-    jump_counter = JumpCounter()
+    default_jumpcounter_params = dict(
+        man_height_m=1.8,
+        earth_gravity=9.81,
+        acceleration_error_ratio=0.6,
+        interpolation_span_p=80,
+        interpolation_span_v=20,
+        interpolation_span_a=10,
+        min_seconds_between_jumps=0.15,
+        max_seconds_between_jumps=1,
+        min_n_frames=5,
+        min_jump_ratio_to_body=0.006,
+        local_maximum_shift=50,
+        local_min_span=200,
+    )
+    jump_counter = JumpCounter(**default_jumpcounter_params)
 
     print(">>> Start")
 
@@ -73,24 +87,26 @@ def main(_args, _idx=None):
 
         # logging.info(f"    {len(regions_active)= }")
         # logging.debug(f"        {regions_active= }")
-        box = np.array(
-            [
-                [bp_client.regions_active[0].rect_x_center, bp_client.regions_active[0].rect_y_center],
-                [bp_client.regions_active[0].rect_w, bp_client.regions_active[0].rect_h],
-            ]
-        )
-        box[0, :] -= box[1, :] / 2
-        scale = np.max(frame.shape[:2])
-        logging.debug(f"{box= }, {scale= }")
-        box = (box * scale).reshape([4]).astype(int)
-        logging.debug(f"{box= }")
+        landmarks_cal = bp_client.get_landmarks_in_bbox()
+        if len(landmarks_cal) > 0:
+            box = np.array(
+                [
+                    [bp_client.regions_active[0].rect_x_center, bp_client.regions_active[0].rect_y_center],
+                    [bp_client.regions_active[0].rect_w, bp_client.regions_active[0].rect_h],
+                ]
+            )
+            box[0, :] -= box[1, :] / 2
+            scale = np.max(frame.shape[:2])
+            logging.debug(f"{box= }, {scale= }")
+            box = (box * scale).reshape([4]).astype(int)
+            logging.debug(f"{box= }")
 
-        # timestamp = vg.current_image_name * MILLI / vg.fps + start_timestamp
-        timestamp = vg.current_image_name / vg.fps + start_timestamp
-        __logger.debug(f"{timestamp= }")
+            # timestamp = vg.current_image_name * MILLI / vg.fps + start_timestamp
+            timestamp = vg.current_image_name / vg.fps + start_timestamp
+            __logger.debug(f"{timestamp= }")
 
-        # jumps = _get_jump_count(box, jump_counter, timestamp)
-        jumps = jump_counter(box, timestamp)
+            # jumps = _get_jump_count(box, jump_counter, timestamp)
+            jumps = jump_counter(box, timestamp)
 
         # if vg.is_file:
         #     timestamp = vg.stream.get(cv2.CAP_PROP_POS_MSEC)
